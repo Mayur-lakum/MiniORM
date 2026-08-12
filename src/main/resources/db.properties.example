@@ -1,0 +1,17 @@
+############################################################
+# MiniORM Database Configuration
+############################################################
+
+# Copy this file as db.properties and configure
+# your local database credentials.
+
+db.url=jdbc:mysql://localhost:3306/miniormdb
+db.username=root
+db.password=YOUR_DATABASE_PASSWORD
+
+############################################################
+# HikariCP Connection Pool Configuration
+############################################################
+
+db.pool.maxSize=10
+db.pool.minIdle=2
