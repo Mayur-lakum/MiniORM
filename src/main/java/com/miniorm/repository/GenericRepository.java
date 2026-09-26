@@ -2,7 +2,6 @@ package com.miniorm.repository;
 
 import com.miniorm.core.EntityManager;
 import com.miniorm.core.QueryOperator;
-import com.miniorm.exception.MiniORMException;
 
 import java.util.List;
 
@@ -13,13 +12,6 @@ public class GenericRepository<T, ID>
 
     public GenericRepository(Class<T> entityClass)
     {
-        if (entityClass == null)
-        {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
-        }
-
         this.entityClass = entityClass;
     }
 

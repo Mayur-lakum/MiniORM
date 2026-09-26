@@ -10,23 +10,15 @@ public final class SQLGenerator
     {
     }
 
-    public static String generateInsertQuery(Class<?> clazz)
+    // INSERT query
+    public static String generateInsertQuery(
+            Class<?> clazz)
     {
-        validateClass(clazz);
-
         String tableName =
                 ReflectionUtil.getTableName(clazz);
 
         Field[] fields =
                 getInsertFields(clazz);
-
-        if (fields.length == 0)
-        {
-            throw new MiniORMException(
-                    "Entity " + clazz.getSimpleName()
-                            + " has no insertable fields."
-            );
-        }
 
         StringBuilder columns =
                 new StringBuilder();
@@ -38,13 +30,14 @@ public final class SQLGenerator
         {
             columns.append(
                     ReflectionUtil.getColumnName(field)
-            ).append(",");
+            ).append(", ");
 
-            values.append("?,");
+            values.append("?, ");
         }
 
-        removeLastCharacter(columns);
-        removeLastCharacter(values);
+        // Remove last comma
+        columns.setLength(columns.length() - 2);
+        values.setLength(values.length() - 2);
 
         return "INSERT INTO "
                 + tableName
@@ -55,18 +48,21 @@ public final class SQLGenerator
                 + ")";
     }
 
+    // Get values for INSERT
     public static Object[] getInsertValues(
             Object object)
     {
         if (object == null)
         {
             throw new MiniORMException(
-                    "Entity object cannot be null."
+                    "Entity cannot be null"
             );
         }
 
         Field[] fields =
-                getInsertFields(object.getClass());
+                getInsertFields(
+                        object.getClass()
+                );
 
         Object[] values =
                 new Object[fields.length];
@@ -83,11 +79,10 @@ public final class SQLGenerator
         return values;
     }
 
+    // UPDATE query
     public static String generateUpdateQuery(
             Class<?> clazz)
     {
-        validateClass(clazz);
-
         String tableName =
                 ReflectionUtil.getTableName(clazz);
 
@@ -104,8 +99,6 @@ public final class SQLGenerator
                 .append(tableName)
                 .append(" SET ");
 
-        int updateFieldCount = 0;
-
         for (Field field : fields)
         {
             if (ReflectionUtil.isPrimaryKey(field))
@@ -115,20 +108,11 @@ public final class SQLGenerator
 
             query.append(
                     ReflectionUtil.getColumnName(field)
-            ).append("=?,");
-
-            updateFieldCount++;
+            ).append(" = ?, ");
         }
 
-        if (updateFieldCount == 0)
-        {
-            throw new MiniORMException(
-                    "Entity " + clazz.getSimpleName()
-                            + " has no fields to update."
-            );
-        }
-
-        removeLastCharacter(query);
+        // Remove last comma
+        query.setLength(query.length() - 2);
 
         query.append(" WHERE ")
                 .append(
@@ -136,16 +120,15 @@ public final class SQLGenerator
                                 primaryKey
                         )
                 )
-                .append("=?");
+                .append(" = ?");
 
         return query.toString();
     }
 
+    // DELETE query
     public static String generateDeleteQuery(
             Class<?> clazz)
     {
-        validateClass(clazz);
-
         String tableName =
                 ReflectionUtil.getTableName(clazz);
 
@@ -155,34 +138,34 @@ public final class SQLGenerator
         return "DELETE FROM "
                 + tableName
                 + " WHERE "
-                + ReflectionUtil.getColumnName(primaryKey)
+                + ReflectionUtil.getColumnName(
+                primaryKey
+        )
                 + " = ?";
     }
 
+    // SELECT all records
     public static String generateFindAllQuery(
             Class<?> clazz)
     {
-        validateClass(clazz);
-
         return "SELECT * FROM "
                 + ReflectionUtil.getTableName(clazz);
     }
 
+    // SELECT with WHERE condition
     public static String generateFindByColumnQuery(
             Class<?> clazz,
             String column,
             QueryOperator operator)
     {
-        validateClass(clazz);
-
         if (operator == null)
         {
             throw new MiniORMException(
-                    "Query operator cannot be null."
+                    "Query operator cannot be null"
             );
         }
 
-        String validatedColumn =
+        String validColumn =
                 ReflectionUtil.validateColumn(
                         clazz,
                         column
@@ -191,12 +174,13 @@ public final class SQLGenerator
         return "SELECT * FROM "
                 + ReflectionUtil.getTableName(clazz)
                 + " WHERE "
-                + validatedColumn
+                + validColumn
                 + " "
                 + operator.toSql()
                 + " ?";
     }
 
+    // Simple WHERE column = value
     public static String generateFindByColumnQuery(
             Class<?> clazz,
             String column)
@@ -208,38 +192,43 @@ public final class SQLGenerator
         );
     }
 
+    // Get fields used during INSERT
     private static Field[] getInsertFields(
             Class<?> clazz)
     {
-        validateClass(clazz);
+        Field[] allFields =
+                ReflectionUtil.getFields(clazz);
 
-        return java.util.Arrays.stream(
-                        ReflectionUtil.getFields(clazz)
-                )
-                .filter(field ->
-                        !ReflectionUtil.isPrimaryKey(field))
-                .toArray(Field[]::new);
-    }
+        int count = 0;
 
-    private static void validateClass(
-            Class<?> clazz)
-    {
-        if (clazz == null)
+        for (Field field : allFields)
+        {
+            if (!ReflectionUtil.isPrimaryKey(field))
+            {
+                count++;
+            }
+        }
+
+        Field[] insertFields =
+                new Field[count];
+
+        int index = 0;
+
+        for (Field field : allFields)
+        {
+            if (!ReflectionUtil.isPrimaryKey(field))
+            {
+                insertFields[index++] = field;
+            }
+        }
+
+        if (insertFields.length == 0)
         {
             throw new MiniORMException(
-                    "Entity class cannot be null."
+                    "No fields available for INSERT"
             );
         }
-    }
 
-    private static void removeLastCharacter(
-            StringBuilder builder)
-    {
-        if (builder.length() > 0)
-        {
-            builder.deleteCharAt(
-                    builder.length() - 1
-            );
-        }
+        return insertFields;
     }
 }

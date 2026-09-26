@@ -7,316 +7,230 @@ import com.miniorm.annotations.Table;
 import com.miniorm.exception.MiniORMException;
 
 import java.lang.reflect.Field;
-import java.util.Arrays;
-import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 public final class ReflectionUtil
 {
-    // Cache reflection metadata to avoid repeated field scanning.
-    private static final Map<Class<?>, Field[]> FIELD_CACHE =
-            new ConcurrentHashMap<>();
-
-    // Cache primary key fields.
-    private static final Map<Class<?>, Field> PK_CACHE =
-            new ConcurrentHashMap<>();
-
-    // Cache valid database column names.
-    private static final Map<Class<?>, Set<String>> COLUMN_NAME_CACHE =
-            new ConcurrentHashMap<>();
-
     private ReflectionUtil()
     {
     }
 
+    // Get table name from @Table
     public static String getTableName(Class<?> clazz)
     {
         if (clazz == null)
         {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
+            throw new MiniORMException("Entity class cannot be null");
         }
 
         if (!clazz.isAnnotationPresent(Entity.class))
         {
             throw new MiniORMException(
-                    "Class " + clazz.getName()
-                            + " is missing @Entity annotation."
+                    "Class must have @Entity annotation"
             );
         }
 
-        if (!clazz.isAnnotationPresent(Table.class))
+        Table table =
+                clazz.getAnnotation(Table.class);
+
+        if (table == null)
         {
             throw new MiniORMException(
-                    "Entity " + clazz.getName()
-                            + " is missing @Table annotation."
+                    "Class must have @Table annotation"
             );
         }
 
-        String tableName =
-                clazz.getAnnotation(Table.class).name();
-
-        if (tableName == null || tableName.isBlank())
-        {
-            throw new MiniORMException(
-                    "Entity " + clazz.getName()
-                            + " has an empty @Table name."
-            );
-        }
-
-        return tableName;
+        return table.name();
     }
 
+    // Get fields that have @Column
     public static Field[] getFields(Class<?> clazz)
     {
-        if (clazz == null)
+        Field[] allFields =
+                clazz.getDeclaredFields();
+
+        Set<Field> fields =
+                new HashSet<>();
+
+        for (Field field : allFields)
         {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
+            if (field.isAnnotationPresent(Column.class))
+            {
+                fields.add(field);
+            }
         }
 
-        return FIELD_CACHE.computeIfAbsent(
-                clazz,
-                c -> Arrays.stream(c.getDeclaredFields())
-                        .filter(field ->
-                                field.isAnnotationPresent(Column.class))
-                        .toArray(Field[]::new)
-        );
+        return fields.toArray(new Field[0]);
     }
 
+    // Get database column name
     public static String getColumnName(Field field)
     {
-        if (field == null)
+        Column column =
+                field.getAnnotation(Column.class);
+
+        if (column == null)
         {
             throw new MiniORMException(
-                    "Field cannot be null."
+                    "Field must have @Column annotation"
             );
         }
 
-        if (!field.isAnnotationPresent(Column.class))
+        if (column.name().isBlank())
         {
-            throw new MiniORMException(
-                    "Field '" + field.getName()
-                            + "' is missing @Column annotation."
-            );
+            return field.getName();
         }
 
-        String name =
-                field.getAnnotation(Column.class).name();
-
-        return (name == null || name.isBlank())
-                ? field.getName()
-                : name;
+        return column.name();
     }
 
+    // Get all valid column names
     public static Set<String> getValidColumnNames(
             Class<?> clazz)
     {
-        return COLUMN_NAME_CACHE.computeIfAbsent(
-                clazz,
-                c -> Arrays.stream(getFields(c))
-                        .map(ReflectionUtil::getColumnName)
-                        .collect(Collectors.toUnmodifiableSet())
-        );
+        Set<String> columns =
+                new HashSet<>();
+
+        for (Field field : getFields(clazz))
+        {
+            columns.add(
+                    getColumnName(field)
+            );
+        }
+
+        return columns;
     }
 
+    // Check whether column exists
     public static String validateColumn(
             Class<?> clazz,
             String column)
     {
-        if (column == null || column.isBlank())
+        if (!getValidColumnNames(clazz)
+                .contains(column))
         {
             throw new MiniORMException(
-                    "Column name cannot be null or blank."
-            );
-        }
-
-        Set<String> validColumns =
-                getValidColumnNames(clazz);
-
-        if (!validColumns.contains(column))
-        {
-            throw new MiniORMException(
-                    "Unknown column '" + column
-                            + "' for entity "
-                            + clazz.getSimpleName()
-                            + ". Valid columns: "
-                            + validColumns
+                    "Invalid column: " + column
             );
         }
 
         return column;
     }
 
+    // Check primary key
     public static boolean isPrimaryKey(Field field)
     {
-        return field != null
-                && field.isAnnotationPresent(Id.class);
+        return field.isAnnotationPresent(Id.class);
     }
 
+    // Get primary key field
+    public static Field getPrimaryKeyField(
+            Class<?> clazz)
+    {
+        for (Field field :
+                clazz.getDeclaredFields())
+        {
+            if (isPrimaryKey(field))
+            {
+                return field;
+            }
+        }
+
+        throw new MiniORMException(
+                "No @Id field found in "
+                        + clazz.getSimpleName()
+        );
+    }
+
+    // Read field value
     public static Object getFieldValue(
             Object object,
             Field field)
     {
-        if (object == null)
-        {
-            throw new MiniORMException(
-                    "Entity object cannot be null."
-            );
-        }
-
-        if (field == null)
-        {
-            throw new MiniORMException(
-                    "Field cannot be null."
-            );
-        }
-
         try
         {
             field.setAccessible(true);
+
             return field.get(object);
         }
         catch (IllegalAccessException e)
         {
             throw new MiniORMException(
-                    "Failed to read field '"
-                            + field.getName() + "'.",
+                    "Cannot read field: "
+                            + field.getName(),
                     e
             );
         }
     }
 
-    public static Field getPrimaryKeyField(
-            Class<?> clazz)
-    {
-        if (clazz == null)
-        {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
-        }
-
-        return PK_CACHE.computeIfAbsent(
-                clazz,
-                c ->
-                {
-                    Field primaryKey = null;
-
-                    for (Field field : c.getDeclaredFields())
-                    {
-                        if (isPrimaryKey(field))
-                        {
-                            if (primaryKey != null)
-                            {
-                                throw new MiniORMException(
-                                        "Entity "
-                                                + c.getSimpleName()
-                                                + " contains multiple "
-                                                + "@Id fields. "
-                                                + "MiniORM requires exactly "
-                                                + "one primary key."
-                                );
-                            }
-
-                            primaryKey = field;
-                        }
-                    }
-
-                    if (primaryKey == null)
-                    {
-                        throw new MiniORMException(
-                                "Entity "
-                                        + c.getSimpleName()
-                                        + " does not contain "
-                                        + "an @Id field."
-                        );
-                    }
-
-                    return primaryKey;
-                }
-        );
-    }
-
+    // Set field value
     public static void setFieldValue(
             Object object,
             Field field,
             Object value)
     {
-        if (object == null)
-        {
-            throw new MiniORMException(
-                    "Entity object cannot be null."
-            );
-        }
-
-        if (field == null)
-        {
-            throw new MiniORMException(
-                    "Field cannot be null."
-            );
-        }
-
         try
         {
             field.setAccessible(true);
 
-            if (value == null)
+            // Handle database numeric types
+            if (value instanceof Number)
             {
-                if (field.getType().isPrimitive())
+                Class<?> type =
+                        field.getType();
+
+                Number number =
+                        (Number) value;
+
+                if (type == int.class
+                        || type == Integer.class)
                 {
-                    throw new MiniORMException(
-                            "Cannot assign null to primitive field '"
-                                    + field.getName() + "'."
+                    field.set(
+                            object,
+                            number.intValue()
                     );
+                    return;
                 }
 
-                field.set(object, null);
-                return;
+                if (type == long.class
+                        || type == Long.class)
+                {
+                    field.set(
+                            object,
+                            number.longValue()
+                    );
+                    return;
+                }
+
+                if (type == double.class
+                        || type == Double.class)
+                {
+                    field.set(
+                            object,
+                            number.doubleValue()
+                    );
+                    return;
+                }
+
+                if (type == float.class
+                        || type == Float.class)
+                {
+                    field.set(
+                            object,
+                            number.floatValue()
+                    );
+                    return;
+                }
             }
 
-            Class<?> type = field.getType();
-
-            if (type == int.class || type == Integer.class)
-            {
-                field.set(object, ((Number) value).intValue());
-            }
-            else if (type == long.class || type == Long.class)
-            {
-                field.set(object, ((Number) value).longValue());
-            }
-            else if (type == double.class
-                    || type == Double.class)
-            {
-                field.set(object, ((Number) value).doubleValue());
-            }
-            else if (type == float.class
-                    || type == Float.class)
-            {
-                field.set(object, ((Number) value).floatValue());
-            }
-            else
-            {
-                field.set(object, value);
-            }
+            field.set(object, value);
         }
         catch (IllegalAccessException e)
         {
             throw new MiniORMException(
-                    "Failed to write field '"
-                            + field.getName() + "'.",
-                    e
-            );
-        }
-        catch (IllegalArgumentException e)
-        {
-            throw new MiniORMException(
-                    "Invalid value for field '"
-                            + field.getName() + "'.",
+                    "Cannot set field: "
+                            + field.getName(),
                     e
             );
         }

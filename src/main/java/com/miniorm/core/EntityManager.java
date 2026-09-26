@@ -18,17 +18,16 @@ public final class EntityManager
     {
     }
 
-    /**
-     * Saves a single entity into the database.
-     *
-     * <p>The generated primary key is automatically assigned
-     * back to the entity object.
-     *
-     * @param object entity to save
-     */
+    // ==================== SAVE ====================
+
     public static void save(Object object)
     {
-        validateObject(object);
+        if (object == null)
+        {
+            throw new MiniORMException(
+                    "Entity cannot be null"
+            );
+        }
 
         Class<?> clazz = object.getClass();
 
@@ -46,53 +45,48 @@ public final class EntityManager
                              query,
                              Statement.RETURN_GENERATED_KEYS))
         {
-            bindValues(statement, values);
+            setValues(statement, values);
 
             int rows =
                     statement.executeUpdate();
 
-            assignGeneratedId(
-                    object,
-                    statement
-            );
+            setGeneratedId(object, statement);
 
-            System.out.printf(
-                    "✅ %d row(s) inserted.%n",
-                    rows
+            System.out.println(
+                    "Inserted " + rows + " row(s)."
             );
         }
         catch (SQLException e)
         {
             throw new MiniORMException(
-                    "Failed to save entity: "
-                            + clazz.getSimpleName(),
+                    "Failed to save entity",
                     e
             );
         }
     }
 
-    /**
-     * Saves multiple entities using JDBC batch processing.
-     *
-     * <p>The operation runs inside a transaction. If any database
-     * error occurs, the transaction is rolled back.
-     *
-     * <p>Generated primary keys are retrieved and assigned back
-     * to the corresponding entity objects.
-     *
-     * @param objects entities to save
-     */
-    public static <T> void saveAll(List<T> objects)
+    // ==================== SAVE ALL ====================
+
+    public static <T> void saveAll(
+            List<T> objects)
     {
         if (objects == null || objects.isEmpty())
         {
             return;
         }
 
-        validateBatch(objects);
-
         Class<?> clazz =
                 objects.get(0).getClass();
+
+        for (T object : objects)
+        {
+            if (object == null)
+            {
+                throw new MiniORMException(
+                        "Entity cannot be null"
+                );
+            }
+        }
 
         String query =
                 SQLGenerator.generateInsertQuery(clazz);
@@ -109,7 +103,7 @@ public final class EntityManager
 
             for (T object : objects)
             {
-                bindValues(
+                setValues(
                         statement,
                         SQLGenerator.getInsertValues(object)
                 );
@@ -117,79 +111,51 @@ public final class EntityManager
                 statement.addBatch();
             }
 
-            int[] results =
-                    statement.executeBatch();
+            statement.executeBatch();
 
-            assignGeneratedIds(
+            setGeneratedIds(
                     objects,
                     statement
             );
 
             connection.commit();
 
-            System.out.printf(
-                    "✅ %d row(s) inserted using batch.%n",
-                    results.length
+            System.out.println(
+                    "Inserted "
+                            + objects.size()
+                            + " row(s) using batch."
             );
         }
         catch (SQLException e)
         {
             throw new MiniORMException(
-                    "Failed to batch save entities of type "
-                            + clazz.getSimpleName(),
-                    e
-            );
-        }
-        catch (RuntimeException e)
-        {
-            throw new MiniORMException(
-                    "Failed to batch save entities of type "
-                            + clazz.getSimpleName(),
+                    "Failed to save batch",
                     e
             );
         }
     }
 
-    /**
-     * Finds an entity by its primary key.
-     *
-     * @param clazz entity class
-     * @param id primary key value
-     * @param <T> entity type
-     * @return mapped entity, or null if not found
-     */
+    // ==================== FIND BY ID ====================
+
     public static <T> T findById(
             Class<T> clazz,
             Object id)
     {
-        if (clazz == null)
+        if (clazz == null || id == null)
         {
             throw new MiniORMException(
-                    "Entity class cannot be null."
+                    "Class and ID cannot be null"
             );
         }
-
-        if (id == null)
-        {
-            throw new MiniORMException(
-                    "Primary key value cannot be null."
-            );
-        }
-
-        String tableName =
-                ReflectionUtil.getTableName(clazz);
 
         Field primaryKey =
                 ReflectionUtil.getPrimaryKeyField(clazz);
 
-        String columnName =
-                ReflectionUtil.getColumnName(primaryKey);
-
         String query =
                 "SELECT * FROM "
-                        + tableName
+                        + ReflectionUtil.getTableName(clazz)
                         + " WHERE "
-                        + columnName
+                        + ReflectionUtil.getColumnName(primaryKey)
                         + " = ?";
 
         try (Connection connection =
@@ -215,10 +181,7 @@ public final class EntityManager
         catch (Exception e)
         {
             throw new MiniORMException(
-                    "Failed to find "
-                            + clazz.getSimpleName()
-                            + " with id "
-                            + id,
+                    "Failed to find entity",
                     e
             );
         }
@@ -226,16 +189,146 @@ public final class EntityManager
         return null;
     }
 
-    /**
-     * Updates an existing entity using its primary key.
-     *
-     * @param object entity to update
-     */
+    // ==================== FIND ALL ====================
+
+    public static <T> List<T> findAll(
+            Class<T> clazz)
+    {
+        if (clazz == null)
+        {
+            throw new MiniORMException(
+                    "Entity class cannot be null"
+            );
+        }
+
+        List<T> result =
+                new ArrayList<>();
+
+        String query =
+                SQLGenerator.generateFindAllQuery(clazz);
+
+        try (Connection connection =
+                     DBConnection.getConnection();
+
+             PreparedStatement statement =
+                     connection.prepareStatement(query);
+
+             ResultSet resultSet =
+                     statement.executeQuery())
+        {
+            while (resultSet.next())
+            {
+                result.add(
+                        mapRow(
+                                clazz,
+                                resultSet
+                        )
+                );
+            }
+        }
+        catch (Exception e)
+        {
+            throw new MiniORMException(
+                    "Failed to fetch entities",
+                    e
+            );
+        }
+
+        return result;
+    }
+
+    // ==================== FIND BY COLUMN ====================
+
+    public static <T> List<T> findByColumn(
+            Class<T> clazz,
+            String column,
+            Object value)
+    {
+        return findWhere(
+                clazz,
+                column,
+                QueryOperator.EQUALS,
+                value
+        );
+    }
+
+    // ==================== FIND WHERE ====================
+
+    public static <T> List<T> findWhere(
+            Class<T> clazz,
+            String column,
+            QueryOperator operator,
+            Object value)
+    {
+        if (clazz == null || operator == null)
+        {
+            throw new MiniORMException(
+                    "Invalid query parameters"
+            );
+        }
+
+        String validColumn =
+                ReflectionUtil.validateColumn(
+                        clazz,
+                        column
+                );
+
+        String query =
+                SQLGenerator.generateFindByColumnQuery(
+                        clazz,
+                        validColumn,
+                        operator
+                );
+
+        List<T> result =
+                new ArrayList<>();
+
+        try (Connection connection =
+                     DBConnection.getConnection();
+
+             PreparedStatement statement =
+                     connection.prepareStatement(query))
+        {
+            statement.setObject(1, value);
+
+            try (ResultSet resultSet =
+                         statement.executeQuery())
+            {
+                while (resultSet.next())
+                {
+                    result.add(
+                            mapRow(
+                                    clazz,
+                                    resultSet
+                            )
+                    );
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            throw new MiniORMException(
+                    "Failed to execute query",
+                    e
+            );
+        }
+
+        return result;
+    }
+
+    // ==================== UPDATE ====================
+
     public static void update(Object object)
     {
-        validateObject(object);
+        if (object == null)
+        {
+            throw new MiniORMException(
+                    "Entity cannot be null"
+            );
+        }
 
-        Class<?> clazz = object.getClass();
+        Class<?> clazz =
+                object.getClass();
 
         String query =
                 SQLGenerator.generateUpdateQuery(clazz);
@@ -246,7 +339,7 @@ public final class EntityManager
         Field primaryKey =
                 ReflectionUtil.getPrimaryKeyField(clazz);
 
-        Object primaryKeyValue =
+        Object id =
                 ReflectionUtil.getFieldValue(
                         object,
                         primaryKey
@@ -258,7 +351,7 @@ public final class EntityManager
              PreparedStatement statement =
                      connection.prepareStatement(query))
         {
-            int parameterIndex = 1;
+            int index = 1;
 
             for (Field field : fields)
             {
@@ -274,56 +367,42 @@ public final class EntityManager
                         );
 
                 statement.setObject(
-                        parameterIndex++,
+                        index++,
                         value
                 );
             }
 
             statement.setObject(
-                    parameterIndex,
-                    primaryKeyValue
+                    index,
+                    id
             );
 
             int rows =
                     statement.executeUpdate();
 
-            System.out.printf(
-                    "✅ %d row(s) updated.%n",
-                    rows
+            System.out.println(
+                    "Updated " + rows + " row(s)."
             );
         }
         catch (SQLException e)
         {
             throw new MiniORMException(
-                    "Failed to update entity: "
-                            + clazz.getSimpleName(),
+                    "Failed to update entity",
                     e
             );
         }
     }
 
-    /**
-     * Deletes an entity by its primary key.
-     *
-     * @param clazz entity class
-     * @param id primary key value
-     * @param <T> entity type
-     */
+    // ==================== DELETE ====================
+
     public static <T> void delete(
             Class<T> clazz,
             Object id)
     {
-        if (clazz == null)
+        if (clazz == null || id == null)
         {
             throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
-        }
-
-        if (id == null)
-        {
-            throw new MiniORMException(
-                    "Primary key value cannot be null."
+                    "Class and ID cannot be null"
             );
         }
 
@@ -341,302 +420,21 @@ public final class EntityManager
             int rows =
                     statement.executeUpdate();
 
-            System.out.printf(
-                    "✅ %d row(s) deleted.%n",
-                    rows
+            System.out.println(
+                    "Deleted " + rows + " row(s)."
             );
         }
         catch (SQLException e)
         {
             throw new MiniORMException(
-                    "Failed to delete "
-                            + clazz.getSimpleName()
-                            + " with id "
-                            + id,
+                    "Failed to delete entity",
                     e
             );
         }
     }
 
-    /**
-     * Retrieves all records for an entity.
-     *
-     * @param clazz entity class
-     * @param <T> entity type
-     * @return list of mapped entities
-     */
-    public static <T> List<T> findAll(
-            Class<T> clazz)
-    {
-        if (clazz == null)
-        {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
-        }
+    // ==================== MAP RESULT ====================
 
-        List<T> objects =
-                new ArrayList<>();
-
-        String query =
-                SQLGenerator.generateFindAllQuery(clazz);
-
-        try (Connection connection =
-                     DBConnection.getConnection();
-
-             PreparedStatement statement =
-                     connection.prepareStatement(query);
-
-             ResultSet resultSet =
-                     statement.executeQuery())
-        {
-            while (resultSet.next())
-            {
-                objects.add(
-                        mapRow(
-                                clazz,
-                                resultSet
-                        )
-                );
-            }
-        }
-        catch (Exception e)
-        {
-            throw new MiniORMException(
-                    "Failed to retrieve "
-                            + clazz.getSimpleName()
-                            + " records.",
-                    e
-            );
-        }
-
-        return objects;
-    }
-
-    /**
-     * Finds entities where a column equals the supplied value.
-     *
-     * @param clazz entity class
-     * @param column column name
-     * @param value value to search for
-     * @param <T> entity type
-     * @return matching entities
-     */
-    public static <T> List<T> findByColumn(
-            Class<T> clazz,
-            String column,
-            Object value)
-    {
-        return findWhere(
-                clazz,
-                column,
-                QueryOperator.EQUALS,
-                value
-        );
-    }
-
-    /**
-     * Executes a dynamic WHERE query.
-     *
-     * @param clazz entity class
-     * @param column column name
-     * @param operator comparison operator
-     * @param value comparison value
-     * @param <T> entity type
-     * @return matching entities
-     */
-    public static <T> List<T> findWhere(
-            Class<T> clazz,
-            String column,
-            QueryOperator operator,
-            Object value)
-    {
-        if (clazz == null)
-        {
-            throw new MiniORMException(
-                    "Entity class cannot be null."
-            );
-        }
-
-        if (operator == null)
-        {
-            throw new MiniORMException(
-                    "Query operator cannot be null."
-            );
-        }
-
-        String validatedColumn =
-                ReflectionUtil.validateColumn(
-                        clazz,
-                        column
-                );
-
-        List<T> objects =
-                new ArrayList<>();
-
-        String query =
-                SQLGenerator.generateFindByColumnQuery(
-                        clazz,
-                        validatedColumn,
-                        operator
-                );
-
-        try (Connection connection =
-                     DBConnection.getConnection();
-
-             PreparedStatement statement =
-                     connection.prepareStatement(query))
-        {
-            statement.setObject(1, value);
-
-            try (ResultSet resultSet =
-                         statement.executeQuery())
-            {
-                while (resultSet.next())
-                {
-                    objects.add(
-                            mapRow(
-                                    clazz,
-                                    resultSet
-                            )
-                    );
-                }
-            }
-        }
-        catch (Exception e)
-        {
-            throw new MiniORMException(
-                    "Failed to query "
-                            + clazz.getSimpleName()
-                            + " where "
-                            + validatedColumn
-                            + " "
-                            + operator,
-                    e
-            );
-        }
-
-        return objects;
-    }
-
-    /**
-     * Binds values to a PreparedStatement.
-     *
-     * @param statement prepared statement
-     * @param values values to bind
-     * @throws SQLException if binding fails
-     */
-    private static void bindValues(
-            PreparedStatement statement,
-            Object[] values)
-            throws SQLException
-    {
-        if (values == null)
-        {
-            return;
-        }
-
-        for (int i = 0; i < values.length; i++)
-        {
-            statement.setObject(
-                    i + 1,
-                    values[i]
-            );
-        }
-    }
-
-    /**
-     * Assigns a generated primary key to a single entity.
-     *
-     * @param object saved entity
-     * @param statement prepared statement
-     * @throws SQLException if generated key retrieval fails
-     */
-    private static void assignGeneratedId(
-            Object object,
-            PreparedStatement statement)
-            throws SQLException
-    {
-        try (ResultSet generatedKeys =
-                     statement.getGeneratedKeys())
-        {
-            if (generatedKeys.next())
-            {
-                Field primaryKey =
-                        ReflectionUtil.getPrimaryKeyField(
-                                object.getClass()
-                        );
-
-                ReflectionUtil.setFieldValue(
-                        object,
-                        primaryKey,
-                        generatedKeys.getObject(1)
-                );
-            }
-        }
-    }
-
-    /**
-     * Assigns generated primary keys to entities inserted
-     * through batch processing.
-     *
-     * @param objects saved entities
-     * @param statement prepared statement
-     * @param <T> entity type
-     * @throws SQLException if generated key retrieval fails
-     */
-    private static <T> void assignGeneratedIds(
-            List<T> objects,
-            PreparedStatement statement)
-            throws SQLException
-    {
-        Field primaryKey =
-                ReflectionUtil.getPrimaryKeyField(
-                        objects.get(0).getClass()
-                );
-
-        try (ResultSet generatedKeys =
-                     statement.getGeneratedKeys())
-        {
-            int index = 0;
-
-            while (generatedKeys.next()
-                    && index < objects.size())
-            {
-                Object generatedId =
-                        generatedKeys.getObject(1);
-
-                ReflectionUtil.setFieldValue(
-                        objects.get(index),
-                        primaryKey,
-                        generatedId
-                );
-
-                index++;
-            }
-
-            if (index != objects.size())
-            {
-                throw new MiniORMException(
-                        "Database returned "
-                                + index
-                                + " generated key(s) for "
-                                + objects.size()
-                                + " inserted entities."
-                );
-            }
-        }
-    }
-
-    /**
-     * Maps the current ResultSet row to an entity object.
-     *
-     * @param clazz entity class
-     * @param resultSet result set
-     * @param <T> entity type
-     * @return mapped entity
-     * @throws Exception if reflection or mapping fails
-     */
     private static <T> T mapRow(
             Class<T> clazz,
             ResultSet resultSet)
@@ -649,11 +447,11 @@ public final class EntityManager
         for (Field field :
                 ReflectionUtil.getFields(clazz))
         {
-            String columnName =
+            String column =
                     ReflectionUtil.getColumnName(field);
 
             Object value =
-                    resultSet.getObject(columnName);
+                    resultSet.getObject(column);
 
             ReflectionUtil.setFieldValue(
                     object,
@@ -665,53 +463,73 @@ public final class EntityManager
         return object;
     }
 
-    /**
-     * Validates a single entity object.
-     *
-     * @param object entity to validate
-     */
-    private static void validateObject(
-            Object object)
+    // ==================== SET VALUES ====================
+
+    private static void setValues(
+            PreparedStatement statement,
+            Object[] values)
+            throws SQLException
     {
-        if (object == null)
+        for (int i = 0; i < values.length; i++)
         {
-            throw new MiniORMException(
-                    "Entity object cannot be null."
+            statement.setObject(
+                    i + 1,
+                    values[i]
             );
         }
     }
 
-    /**
-     * Validates that all entities in a batch are non-null
-     * and belong to the same class.
-     *
-     * @param objects entities to validate
-     */
-    private static void validateBatch(
-            List<?> objects)
-    {
-        Class<?> entityClass =
-                objects.get(0).getClass();
+    // ==================== GENERATED ID ====================
 
-        for (Object object : objects)
+    private static void setGeneratedId(
+            Object object,
+            PreparedStatement statement)
+            throws SQLException
+    {
+        try (ResultSet keys =
+                     statement.getGeneratedKeys())
         {
-            if (object == null)
+            if (keys.next())
             {
-                throw new MiniORMException(
-                        "Batch cannot contain null entities."
+                Field primaryKey =
+                        ReflectionUtil.getPrimaryKeyField(
+                                object.getClass()
+                        );
+
+                ReflectionUtil.setFieldValue(
+                        object,
+                        primaryKey,
+                        keys.getObject(1)
                 );
             }
+        }
+    }
 
-            if (object.getClass() != entityClass)
-            {
-                throw new MiniORMException(
-                        "All entities in a batch must have "
-                                + "the same type. Expected "
-                                + entityClass.getSimpleName()
-                                + " but found "
-                                + object.getClass().getSimpleName()
-                                + "."
+    private static <T> void setGeneratedIds(
+            List<T> objects,
+            PreparedStatement statement)
+            throws SQLException
+    {
+        Field primaryKey =
+                ReflectionUtil.getPrimaryKeyField(
+                        objects.get(0).getClass()
                 );
+
+        try (ResultSet keys =
+                     statement.getGeneratedKeys())
+        {
+            int index = 0;
+
+            while (keys.next()
+                    && index < objects.size())
+            {
+                ReflectionUtil.setFieldValue(
+                        objects.get(index),
+                        primaryKey,
+                        keys.getObject(1)
+                );
+
+                index++;
             }
         }
     }
